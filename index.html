@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Fantasy Draft</title>
+
+<style>
+body { font-family: Arial, sans-serif; margin: 0; }
+header { background:#222; color:white; padding:10px; }
+.team-list { display:flex; gap:20px; padding:10px; background:#f4f4f4; overflow-x:auto; }
+.team { min-width:180px; font-size:14px; }
+.main { display:flex; }
+.panel { flex:1; padding:10px; }
+.row { display:grid; grid-template-columns:2fr 1fr 1fr 1fr auto; gap:6px; padding:4px 0; }
+button { padding:4px 8px; }
+.draft-btn { background:#2a6df4; color:white; border:none; cursor:pointer; }
+.disabled { opacity:.4; pointer-events:none; }
+#overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; }
+#modal { background:white; padding:20px; width:300px; }
+.timer { font-weight:bold; color:#d12; }
+.controls { display:flex; gap:10px; margin-bottom:10px; }
+</style>
+</head>
+
+<body>
+
+<div id="overlay" style="display:none">
+  <div id="modal">
+    <h3>Enter Team Name</h3>
+    <input id="teamNameInput" style="width:100%" />
+    <button onclick="saveTeamName()">Join Draft</button>
+    <p id="nameError" style="color:red"></p>
+  </div>
+</div>
+
+<header>
+  <strong>Fantasy Draft</strong> —
+  Round <span id="round">1</span>
+  Pick <span id="pick">1</span>
+  | Time Left: <span class="timer" id="timer"></span>
+</header>
+
+<div class="team-list" id="teamList"></div>
+
+<div class="panel controls">
+  <input type="file" accept=".csv" onchange="uploadCSV(event)">
+  <select id="teamSelect" onchange="switchTeam()"></select>
+  <select id="posFilter" onchange="render()">
+    <option value="">All Positions</option>
+    <option>SP</option><option>RP</option><option>OF</option>
+    <option>IF</option><option>C</option>
+  </select>
+</div>
+
+<div class="main">
+  <div class="panel">
+    <h3>Available Players</h3>
+    <div id="playerPool"></div>
+  </div>
+</div>
+
+<script>
+// ================= ADMIN SETTINGS =================
+const PICK_TIME_SECONDS = 60;
+const draftOrder = [
+  "Team A","Team B","Team C","Team D",
+  "Team E","Team F","Team G","Team H",
+  "Team I","Team J","Team K","Team L",
+  "Team M","Team N","Team O","Team P"
+];
+// ==================================================
+
+let players = [];
+let teams = {};
+let currentPick = 0;
+let round = 1;
+let timeLeft = PICK_TIME_SECONDS;
+let timerInterval;
+
+let myTeam = localStorage.getItem("teamName");
+
+// Initialize teams
+draftOrder.forEach(t => teams[t] = []);
+
+// Prompt team name
+if (!myTeam || !teams[myTeam]) {
+  document.getElementById("overlay").style.display = "flex";
+}
+
+// Populate team switcher
+const teamSelect = document.getElementById("teamSelect");
+draftOrder.forEach(t => {
+  const opt = document.createElement("option");
+  opt.value = t;
+  opt.textContent = t;
+  teamSelect.appendChild(opt);
+});
+
+function switchTeam() {
+  myTeam = teamSelect.value;
+  localStorage.setItem("teamName", myTeam);
+  render();
+}
+
+function saveTeamName() {
+  const name = document.getElementById("teamNameInput").value.trim();
+  if (!name || teams[name]) {
+    document.getElementById("nameError").innerText = "Name taken";
+    return;
+  }
+  teams[name] = [];
+  localStorage.setItem("teamName", name);
+  myTeam = name;
+  document.getElementById("overlay").style.display = "none";
+  render();
+}
+
+// CSV upload
+function uploadCSV(e) {
+  const file = e.target.files[0];
+  const reader = new FileReader();
+  reader.onload = () => {
+    const lines = reader.result.split("\n").slice(1);
+    players = lines.map((l,i) => {
+      const [name,team,pos,pct] = l.split(",");
+      return {id:i,name,team,pos,pct:parseFloat(pct),drafted:false};
+    }).filter(p => p.name);
+    render();
+  };
+  reader.readAsText(file);
+}
+
+// Timer
+function startTimer() {
+  clearInterval(timerInterval);
+  timeLeft = PICK_TIME_SECONDS;
+  timerInterval = setInterval(() => {
+    timeLeft--;
+    if (timeLeft <= 0) autoPick();
+    render();
+  }, 1000);
+}
+
+function autoPick() {
+  clearInterval(timerInterval);
+  const available = players.filter(p => !p.drafted)
+    .sort((a,b) => b.pct - a.pct);
+  if (available.length) draftPlayer(available[0]);
+}
+
+// Draft logic
+function draftPlayer(p) {
+  const activeTeam = draftOrder[currentPick % draftOrder.length];
+  p.drafted = true;
+  teams[activeTeam].push(p);
+  currentPick++;
+  if (currentPick % draftOrder.length === 0) round++;
+  startTimer();
+  render();
+}
+
+function render() {
+  document.getElementById("round").innerText = round;
+  document.getElementById("pick").innerText = currentPick + 1;
+  document.getElementById("timer").innerText = timeLeft;
+
+  teamSelect.value = myTeam;
+
+  // Team list
+  const teamList = document.getElementById("teamList");
+  teamList.innerHTML = "";
+  Object.keys(teams).forEach(t => {
+    const d = document.createElement("div");
+    d.className = "team";
+    d.innerHTML = `<strong>${t}</strong><br>` +
+      teams[t].map(p => p.name).join("<br>");
+    teamList.appendChild(d);
+  });
+
+  const pool = document.getElementById("playerPool");
+  pool.innerHTML = "";
+
+  const activeTeam = draftOrder[currentPick % draftOrder.length];
+  const isMyTurn = myTeam === activeTeam;
+  const posFilter = document.getElementById("posFilter").value;
+
+  players
+    .filter(p => !p.drafted && (!posFilter || p.pos === posFilter))
+    .sort((a,b) => b.pct - a.pct)
+    .forEach(p => {
+      const r = document.createElement("div");
+      r.className = "row";
+      r.innerHTML = `
+        <span>${p.name}</span>
+        <span>${p.team}</span>
+        <span>${p.pos}</span>
+        <span>${p.pct}%</span>
+        <button class="draft-btn ${isMyTurn ? "" : "disabled"}">DRAFT</button>
+      `;
+      r.querySelector("button").onclick = () => isMyTurn && draftPlayer(p);
+      pool.appendChild(r);
+    });
+}
+
+// Start first timer
+startTimer();
+render();
+</script>
+
+</body>
+</html>
